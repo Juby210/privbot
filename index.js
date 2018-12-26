@@ -16,13 +16,14 @@ client.on('message', message => {
 
     if(command == "give") {
         if(!args[0]) return message.channel.send("Give role color hex (#xxxxxx)");
-        if(!args[0].startsWith("#")) return message.channel.send("This is not correct hex color");
+        if (!/^#?([a-fA-F0-9]{6}|[a-fA-F0-9]{3})$/.test(args[0])) return message.channel.send("The color must be in the hex format");
         let color = args[0].toLowerCase();
 
         let cr;
         message.member.roles.forEach(r => {
             if(r.name.startsWith("color: ")) cr = r;
         });
+        if(cr && cr.name == `color: ${color}`) return message.channel.send(`Color added ${color}`);
         if(cr) {
             message.member.removeRole(cr).then(() => {
                 if(cr.members.size == 0) cr.delete();
