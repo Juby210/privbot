@@ -1,2 +1,2 @@
 # ColorRoles
-Weak and bugged discord bot for my private server.
+Bot for my private server.
