@@ -22,15 +22,15 @@ var (
 func handler(s disgord.Session, data *disgord.MessageCreate) {
 	msg := data.Message
 	args := strings.Split(msg.Content, " ")
+	g, _ := s.GetGuild(ctx, msg.GuildID)
 
 	if args[0] == "give" {
 		if len(args) == 1 {
 			msg.Reply(ctx, s, "Give role color hex (#xxxxxx)")
 		} else {
-			handleGive(msg, msg.Author.ID, args[1], s)
+			handleGive(msg, msg.Author.ID, args[1], s, g)
 		}
 	} else if args[0] == "give2" {
-		g, _ := s.GetGuild(ctx, msg.GuildID)
 		p, _ := s.GetMemberPermissions(ctx, g.ID, msg.Author.ID)
 		if p&disgord.PermissionAdministrator == 0 && p&disgord.PermissionManageRoles == 0 {
 			msg.Reply(ctx, s, "You don't have permission to manage roles")
@@ -43,11 +43,10 @@ func handler(s disgord.Session, data *disgord.MessageCreate) {
 			if len(msg.Mentions) == 0 {
 				msg.Reply(ctx, s, "Mention user to give color")
 			} else {
-				handleGive(msg, msg.Mentions[0].ID, args[1], s)
+				handleGive(msg, msg.Mentions[0].ID, args[1], s, g)
 			}
 		}
 	} else if args[0] == "clear" {
-		g, _ := s.GetGuild(ctx, msg.GuildID)
 		m, _ := g.Member(msg.Author.ID)
 
 		for _, rID := range m.Roles {
@@ -64,7 +63,7 @@ func handler(s disgord.Session, data *disgord.MessageCreate) {
 	}
 }
 
-func handleGive(msg *disgord.Message, uID disgord.Snowflake, carg string, s disgord.Session) {
+func handleGive(msg *disgord.Message, uID disgord.Snowflake, carg string, s disgord.Session, g *disgord.Guild) {
 	validColor := regexp.MustCompile(`^#?([a-fA-F0-9]{6})$`)
 	if validColor.MatchString(carg) {
 		color := strings.ToLower(carg)
@@ -72,7 +71,6 @@ func handleGive(msg *disgord.Message, uID disgord.Snowflake, carg string, s disg
 			color = "#" + color
 		}
 
-		g, _ := s.GetGuild(ctx, msg.GuildID)
 		m, _ := g.Member(uID)
 		var cr *disgord.Role
 
