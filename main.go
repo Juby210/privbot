@@ -32,7 +32,7 @@ func handler(s disgord.Session, data *disgord.MessageCreate) {
 	} else if args[0] == "give2" {
 		g, _ := s.GetGuild(ctx, msg.GuildID)
 		p, _ := s.GetMemberPermissions(ctx, g.ID, msg.Author.ID)
-		if (p&disgord.PermissionAdministrator) == 0 && p&disgord.PermissionManageRoles == 0 {
+		if p&disgord.PermissionAdministrator == 0 && p&disgord.PermissionManageRoles == 0 {
 			msg.Reply(ctx, s, "You don't have permission to manage roles")
 			return
 		}
