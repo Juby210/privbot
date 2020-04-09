@@ -15,9 +15,10 @@ import (
 )
 
 type cfg struct {
-	Token, Prefix string
-	Selfroles     map[string]disgord.Snowflake
-	Starboard     disgord.Snowflake
+	Token, Prefix    string
+	Selfroles        map[string]disgord.Snowflake
+	Starboard        disgord.Snowflake
+	StarboardEnabled bool
 }
 
 var (
@@ -208,5 +209,7 @@ func main() {
 		client.UpdateStatusString(config.Prefix + "give (color)")
 	})
 
-	client.On(disgord.EvtMessageReactionAdd, starboard)
+	if config.StarboardEnabled {
+		client.On(disgord.EvtMessageReactionAdd, starboard)
+	}
 }
