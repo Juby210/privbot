@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/andersfylling/disgord"
 	"github.com/andersfylling/disgord/std"
+	"github.com/sirupsen/logrus"
 )
 
 type cfg struct {
@@ -24,6 +25,13 @@ type cfg struct {
 var (
 	config cfg
 	ctx    = context.Background()
+
+	log = &logrus.Logger{
+		Out:       os.Stderr,
+		Formatter: new(logrus.TextFormatter),
+		Hooks:     make(logrus.LevelHooks),
+		Level:     logrus.InfoLevel,
+	}
 )
 
 func handler(s disgord.Session, data *disgord.MessageCreate) {
@@ -135,8 +143,7 @@ func handleGive(msg *disgord.Message, uID disgord.Snowflake, carg string, s disg
 			mem, _ := g.Member(u.ID)
 			role, _ := s.CreateGuildRole(ctx, g.ID, &disgord.CreateGuildRoleParams{Name: "color: #" + color, Color: uint(col)})
 			s.UpdateGuildRole(ctx, g.ID, role.ID).SetPermissions(0).Execute()
-			s.UpdateGuildRolePositions(ctx, g.ID, []disgord.UpdateGuildRolePositionsParams{
-				disgord.UpdateGuildRolePositionsParams{ID: role.ID, Position: getHighestRolePos(g, mem)}})
+			s.UpdateGuildRolePositions(ctx, g.ID, []disgord.UpdateGuildRolePositionsParams{{ID: role.ID, Position: getHighestRolePos(g, mem)}})
 			s.AddGuildMemberRole(ctx, g.ID, uID, role.ID)
 		}
 		reply()
@@ -178,9 +185,13 @@ func getHighestRolePos(g *disgord.Guild, mem *disgord.Member) int {
 }
 
 func main() {
-	cfile, err := ioutil.ReadFile("config.json")
-	if err != nil {
-		fmt.Println(err)
+	var err error
+	cfile := []byte(os.Getenv("CONFIG"))
+	if string(cfile) == "" {
+		cfile, err = ioutil.ReadFile("config.json")
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 
 	err = json.Unmarshal(cfile, &config)
@@ -190,7 +201,7 @@ func main() {
 
 	client := disgord.New(disgord.Config{
 		BotToken: config.Token,
-		Logger:   disgord.DefaultLogger(false),
+		Logger:   log,
 	})
 	defer client.StayConnectedUntilInterrupted(ctx)
 
