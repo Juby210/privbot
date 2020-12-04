@@ -1,8 +1,6 @@
 module privbot
 
-go 1.13
+go 1.15
 
-require (
-	github.com/andersfylling/disgord v0.18.0
-	github.com/sirupsen/logrus v1.7.0
-)
+require github.com/diamondburned/arikawa v1.3.14
+

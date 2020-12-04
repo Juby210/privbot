@@ -1,187 +1,163 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/andersfylling/disgord"
-	"github.com/andersfylling/disgord/std"
-	"github.com/sirupsen/logrus"
+	"github.com/diamondburned/arikawa/api"
+	"github.com/diamondburned/arikawa/bot"
+	"github.com/diamondburned/arikawa/bot/extras/middlewares"
+	"github.com/diamondburned/arikawa/discord"
+	"github.com/diamondburned/arikawa/gateway"
+	"github.com/diamondburned/arikawa/utils/json/option"
 )
 
-type cfg struct {
-	Token, Prefix    string
-	Selfroles        map[string]disgord.Snowflake
-	Starboard        disgord.Snowflake
-	StarboardEnabled bool
-}
+type (
+	cfg struct {
+		Token, Prefix    string
+		Selfroles        map[string]discord.RoleID
+		Starboard        discord.ChannelID
+		StarboardEnabled bool
+	}
 
-var (
-	config cfg
-	ctx    = context.Background()
+	hexColor string
 
-	log = &logrus.Logger{
-		Out:       os.Stderr,
-		Formatter: new(logrus.TextFormatter),
-		Hooks:     make(logrus.LevelHooks),
-		Level:     logrus.InfoLevel,
+	Bot struct {
+		Ctx *bot.Context
 	}
 )
 
-func handler(s disgord.Session, data *disgord.MessageCreate) {
-	msg := data.Message
-	args := strings.Split(msg.Content, " ")
-	g, _ := s.GetGuild(ctx, msg.GuildID)
+var config cfg
 
-	switch args[0] {
-	case "give":
-		if len(args) == 1 {
-			msg.Reply(ctx, s, "Give role color hex (#xxxxxx)")
-		} else {
-			handleGive(msg, msg.Author.ID, args[1], s, g)
-		}
-	case "give2":
-		p, _ := s.GetMemberPermissions(ctx, g.ID, msg.Author.ID)
-		if p&disgord.PermissionAdministrator == 0 && p&disgord.PermissionManageRoles == 0 {
-			msg.Reply(ctx, s, "You don't have permission to manage roles")
-			return
-		}
+func (h *hexColor) Parse(arg string) error {
+	if regexp.MustCompile(`^#?([a-fA-F0-9]{6})$`).MatchString(arg) {
+		*h = hexColor(strings.ToLower(strings.TrimPrefix(arg, "#")))
+	} else {
+		return errors.New("The color must be in the hex format (#xxxxxx)")
+	}
+	return nil
+}
 
-		if len(args) != 3 {
-			msg.Reply(ctx, s, "Give role color hex (#xxxxxx) and mention user to give color")
-		} else {
-			if len(msg.Mentions) == 0 {
-				msg.Reply(ctx, s, "Mention user to give color")
+func (h *hexColor) Usage() string {
+	return "#xxxxxx"
+}
+
+func (bot *Bot) Setup(sub *bot.Subcommand) {
+	sub.AddMiddleware("Clear", middlewares.GuildOnly(bot.Ctx))
+	sub.AddMiddleware("Give", middlewares.GuildOnly(bot.Ctx))
+	sub.AddMiddleware("Role", middlewares.GuildOnly(bot.Ctx))
+}
+
+func (bot *Bot) Help(*gateway.MessageCreateEvent) (string, error) {
+	return bot.Ctx.Help(), nil
+}
+
+func (bot *Bot) Clear(m *gateway.MessageCreateEvent) (string, error) {
+	for _, id := range m.Member.RoleIDs {
+		r, _ := bot.Ctx.Role(m.GuildID, id)
+		if strings.HasPrefix(r.Name, "color: ") {
+			if roleMembersCount(bot.Ctx, m.GuildID, id) <= 1 {
+				bot.Ctx.DeleteRole(m.GuildID, id)
 			} else {
-				handleGive(msg, msg.Mentions[0].ID, args[1], s, g)
+				bot.Ctx.RemoveRole(m.GuildID, m.Author.ID, id)
 			}
 		}
-	case "clear":
-		m, _ := g.Member(msg.Author.ID)
+	}
+	return "Cleared your color", nil
+}
 
-		for _, rID := range m.Roles {
-			r, _ := g.Role(rID)
-			if strings.HasPrefix(r.Name, "color: ") {
-				if roleMembersCount(g, r.ID) <= 1 {
-					s.DeleteGuildRole(ctx, g.ID, r.ID)
-				} else {
-					s.RemoveGuildMemberRole(ctx, g.ID, msg.Author.ID, r.ID)
-				}
-			}
+func (bot *Bot) Give(m *gateway.MessageCreateEvent, color hexColor) (string, error) {
+	c := string(color)
+
+	var cr *discord.Role
+	for _, id := range m.Member.RoleIDs {
+		r, _ := bot.Ctx.Role(m.GuildID, id)
+		if strings.HasPrefix(r.Name, "color: #") {
+			cr = r
 		}
-		msg.Reply(ctx, s, "Cleared your color")
-	case "role":
-		if len(args) > 1 {
-			id, ok := config.Selfroles[args[1]]
-			if ok {
-				r, err := g.Role(id)
-				if err != nil {
-					msg.Reply(ctx, s, "Error: "+err.Error())
-					return
-				}
+	}
+	if cr != nil && cr.Name == "color: #"+c {
+		return "Color added: `#" + c + "`", nil
+	}
 
-				m, _ := g.Member(msg.Author.ID)
-				for _, rID := range m.Roles {
-					if rID == id {
-						s.RemoveGuildMemberRole(ctx, g.ID, msg.Author.ID, id)
-						msg.Reply(ctx, s, "Removed role: `"+r.Name+"`")
-						return
-					}
-				}
-
-				s.AddGuildMemberRole(ctx, g.ID, msg.Author.ID, id)
-				msg.Reply(ctx, s, "Added role: `"+r.Name+"`")
-				return
-			}
+	roles, _ := bot.Ctx.Roles(m.GuildID)
+	found := false
+	for _, r := range roles {
+		if r.Name == "color: #"+c {
+			bot.Ctx.AddRole(m.GuildID, m.Author.ID, r.ID)
+			found = true
 		}
+	}
+	if !found {
+		col, _ := strconv.ParseUint(c, 16, 32)
+		r, _ := bot.Ctx.CreateRole(m.GuildID, api.CreateRoleData{Name: "color: #" + c, Color: discord.Color(col), Permissions: 0})
+
+		var perm discord.Permissions = 0
+		bot.Ctx.ModifyRole(m.GuildID, r.ID, api.ModifyRoleData{Permissions: &perm})
+		mem, _ := bot.Ctx.Member(m.GuildID, bot.Ctx.Ready.User.ID)
+		bot.Ctx.MoveRole(m.GuildID, []api.MoveRoleData{{ID: r.ID,
+			Position: option.NewNullableInt(getHighestRolePos(bot.Ctx, m.GuildID, mem.RoleIDs))}})
+		bot.Ctx.AddRole(m.GuildID, m.Author.ID, r.ID)
+	}
+
+	if cr != nil {
+		if roleMembersCount(bot.Ctx, m.GuildID, cr.ID) <= 1 {
+			bot.Ctx.DeleteRole(m.GuildID, cr.ID)
+		} else {
+			bot.Ctx.RemoveRole(m.GuildID, m.Author.ID, cr.ID)
+		}
+	}
+
+	return "Color added: `#" + c + "`", nil
+}
+
+func (bot *Bot) Role(m *gateway.MessageCreateEvent, role string) (string, error) {
+	id, ok := config.Selfroles[role]
+	if !ok {
 		roles := ""
 		for r := range config.Selfroles {
-			if roles != "" {
-				roles += ", "
-			}
-			roles += r
+			roles += "\n      " + r
 		}
-		msg.Reply(ctx, s, "**Selfroles**: "+roles)
+		return "__Selfroles__" + roles, nil
 	}
+	r, _ := bot.Ctx.Role(m.GuildID, id)
+	for _, rID := range m.Member.RoleIDs {
+		if rID == id {
+			bot.Ctx.RemoveRole(m.GuildID, m.Author.ID, id)
+			return "Removed role: `" + r.Name + "`", nil
+		}
+	}
+	bot.Ctx.AddRole(m.GuildID, m.Author.ID, id)
+	return "Added role: `" + r.Name + "`", nil
 }
 
-func handleGive(msg *disgord.Message, uID disgord.Snowflake, carg string, s disgord.Session, g *disgord.Guild) {
-	if regexp.MustCompile(`^#?([a-fA-F0-9]{6})$`).MatchString(carg) {
-		color := strings.ToLower(strings.TrimPrefix(carg, "#"))
-
-		m, _ := g.Member(uID)
-		var cr *disgord.Role
-
-		for _, rID := range m.Roles {
-			r, _ := g.Role(rID)
-			if strings.HasPrefix(r.Name, "color: #") {
-				cr = r
-			}
-		}
-
-		reply := func() {
-			msg.Reply(ctx, s, "Color added: `#"+color+"`")
-		}
-
-		if cr != nil && cr.Name == "color: #"+color {
-			reply()
-			return
-		}
-
-		roles, _ := g.RoleByName("color: #" + color)
-		if len(roles) >= 1 {
-			s.AddGuildMemberRole(ctx, g.ID, uID, roles[0].ID)
-		} else {
-			col, _ := strconv.ParseUint(color, 16, 32)
-			u, _ := s.GetCurrentUser(ctx)
-			mem, _ := g.Member(u.ID)
-			role, _ := s.CreateGuildRole(ctx, g.ID, &disgord.CreateGuildRoleParams{Name: "color: #" + color, Color: uint(col)})
-			s.UpdateGuildRole(ctx, g.ID, role.ID).SetPermissions(0).Execute()
-			s.UpdateGuildRolePositions(ctx, g.ID, []disgord.UpdateGuildRolePositionsParams{{ID: role.ID, Position: getHighestRolePos(g, mem)}})
-			s.AddGuildMemberRole(ctx, g.ID, uID, role.ID)
-		}
-		reply()
-
-		if cr == nil {
-			return
-		}
-		if roleMembersCount(g, cr.ID) <= 1 {
-			s.DeleteGuildRole(ctx, g.ID, cr.ID)
-		} else {
-			s.RemoveGuildMemberRole(ctx, g.ID, uID, cr.ID)
-		}
-	} else {
-		msg.Reply(ctx, s, "The color must be in the hex format")
-	}
-}
-
-func roleMembersCount(g *disgord.Guild, rID disgord.Snowflake) int {
-	mr := 0
-	for _, mem := range g.Members {
-		for _, role := range mem.Roles {
+func roleMembersCount(ctx *bot.Context, gID discord.GuildID, rID discord.RoleID) (mr int) {
+	m, _ := ctx.Members(gID)
+	for _, mem := range m {
+		for _, role := range mem.RoleIDs {
 			if role == rID {
 				mr++
 			}
 		}
 	}
-	return mr
+	return
 }
 
-func getHighestRolePos(g *disgord.Guild, mem *disgord.Member) int {
-	max := -1
-	for _, r := range mem.Roles {
-		role, _ := g.Role(r)
+func getHighestRolePos(ctx *bot.Context, gID discord.GuildID, roleIDs []discord.RoleID) (max int) {
+	for _, r := range roleIDs {
+		role, _ := ctx.Role(gID, r)
 		if role.Position > max {
 			max = role.Position
 		}
 	}
-	return max
+	return
 }
 
 func main() {
@@ -199,28 +175,23 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	client := disgord.New(disgord.Config{
-		BotToken: config.Token,
-		Logger:   log,
-	})
-	defer client.StayConnectedUntilInterrupted(ctx)
+	commands := &Bot{}
 
-	filter, _ := std.NewMsgFilter(ctx, client)
-	filter.SetPrefix(config.Prefix)
-
-	client.On(disgord.EvtMessageCreate,
-		filter.NotByBot,
-		filter.HasPrefix,
-		std.CopyMsgEvt,
-		filter.StripPrefix,
-		handler)
-
-	client.On(disgord.EvtReady, func() {
-		fmt.Println("ready")
-		client.UpdateStatusString(config.Prefix + "give (color)")
+	wait, err := bot.Start(config.Token, commands, func(ctx *bot.Context) error {
+		ctx.HasPrefix = bot.NewPrefix(config.Prefix)
+		ctx.AddHandler(starboard(ctx))
+		ctx.AddHandler(func(r *gateway.ReadyEvent) {
+			fmt.Println("ready as " + r.User.Username)
+			ctx.Gateway.UpdateStatus(gateway.UpdateStatusData{Game: &discord.Activity{Name: config.Prefix + "give (color)"}})
+		})
+		return nil
 	})
 
-	if config.StarboardEnabled {
-		client.On(disgord.EvtMessageReactionAdd, starboard)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	if err := wait(); err != nil {
+		log.Fatalln("Gateway fatal error:", err)
 	}
 }
